@@ -18,21 +18,25 @@ An agent should not be able to call a tool just because it can reach the server.
 
 ---
 
-## What's built (Sprint 1)
+## What's built (Sprints 1–2)
 
-The full spine runs end to end, on a deliberately fake MCP server so the security layer can be shown without external dependencies:
+The full boundary runs end to end, across two fake MCP servers so the security layer can be shown without external dependencies. The caller presents a **token** — never a claimed identity — and every gate is enforced in order:
 
 ```
-identity  ->  policy decision  ->  (execute | hold for approval | block)  ->  audit event
+authenticate -> resolve tool -> scope check -> policy -> (execute | hold | block) -> audit event
 ```
 
 | Component | What it does | File |
 |---|---|---|
-| **Agent identity** | Every actor has a stable id + scoped roles | `agents/identity.py` |
-| **MCP Gateway** | The single boundary every tool call passes through | `gateway/gateway.py` |
+| **Agent identity** | Every actor has a stable id + roles | `agents/identity.py` |
+| **Auth service** | Issues **scoped, hashed, expiring** credentials; verifies tokens; **revokes** | `gateway/auth.py` |
+| **Tool registry** | Declares each tool's **server** + **required scope**; routes across servers | `gateway/registry.py` |
+| **MCP Gateway** | The single boundary: authn → scope → policy → execute → audit | `gateway/gateway.py` |
 | **Policy engine** | Deterministic **ALLOW / DENY / APPROVAL**, **default deny** | `policy/engine.py` |
 | **Tamper-evident audit** | SHA-256 **hash chain** + **Ed25519** signatures | `audit/log.py` |
-| **Fake MCP server** | A tiny tool registry to route into | `mcp_servers/fake_mcp.py` |
+| **Fake MCP servers** | Files + mail — two backends to route between | `mcp_servers/` |
+
+**Sprint 2 closed Sprint 1's trust hole:** the gateway no longer accepts an Agent the caller *claims* to be. The caller proves identity with a token; the gateway derives the agent from it, enforces the credential's scopes (least privilege, before policy runs), and audits every attempt — including rejected ones — against the identity actually proven.
 
 ---
 
@@ -43,7 +47,7 @@ pip install -r requirements.txt
 python demo.py
 ```
 
-You'll see an allowed call execute, a destructive call held for approval, a disallowed call denied by default — then the audit log **verify clean**, and finally a deliberate tamper that verification **catches**.
+You'll see an in-scope call execute, a destructive call held for approval, an **out-of-scope** call blocked before policy, an **unauthenticated** token rejected, a **revoked** credential stop working — then the audit log **verify clean**, and finally a deliberate tamper that verification **catches**.
 
 ```bash
 pip install pytest && pytest -q      # the guarantees as tests
@@ -63,8 +67,8 @@ pip install pytest && pytest -q      # the guarantees as tests
 
 ## Roadmap
 
-- **S1 · Foundations** ✅ — repo, gateway, policy, tamper-evident audit *(this)*
-- **S2 · Gateway & identity** — real auth, tool registry, scoped credentials
+- **S1 · Foundations** ✅ — repo, gateway, policy, tamper-evident audit
+- **S2 · Gateway & identity** ✅ — token auth, tool registry, scoped credentials, revocation *(this)*
 - **S3 · Policy & intent** — intent scoping, per-parameter conditions
 - **S4 · Evidence** — OpenTelemetry trace/run/agent IDs, chain head anchored in Azure Blob **WORM**, signing key in **Key Vault**
 - **S5 · Approval & dashboard** — human-in-the-loop service + console
