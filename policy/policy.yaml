@@ -1,0 +1,17 @@
+# AgentLedger policy — default deny.
+# A tool call is ALLOWed only if a role of the calling agent lists it under
+# `allow`. Destructive tools go under `approval`, so they are held for a human
+# instead of being refused outright. Anything not mentioned is denied.
+
+roles:
+  reader:
+    allow:
+      - list_files
+      - read_file
+
+  operator:
+    allow:
+      - list_files
+      - read_file
+    approval:
+      - delete_file      # destructive: never runs without a human in the loop
