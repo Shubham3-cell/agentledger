@@ -1,20 +1,14 @@
-"""AgentLedger — Sprint 3 end-to-end demo.
+"""AgentLedger — Sprint 4 end-to-end demo.
 
 Run:  python demo.py
 
-Sprint 3 adds two gates: a per-run **intent** boundary and **per-parameter**
-policy. The scenario follows one agent through two different tasks.
-
-  Task A — "investigate-incident" (may read files, list mail; NOT send mail):
-    1. read a /reports/ file            -> ALLOWED (in scope, in intent, path ok)
-    2. read /etc/passwd                 -> DENIED at policy (path outside /reports/)
-    3. try to send an email             -> DENIED at intent (not this task's job)
-
-  Task B — "notify-team" (may send mail):
-    4. email a colleague @company.com   -> APPROVAL (policy: internal, needs a human)
-    5. email attacker@evil.com          -> DENIED at policy (recipient not @company.com)
-
-  Then: the audit log verifies, and tampering is caught.
+Sprint 4 makes the audit log evidence-grade:
+  1. Calls in a task share a trace_id / run_id (distributed-trace shape).
+  2. Each event's head is anchored to an external WORM witness.
+  3. The log verifies — chain + signatures + anchor.
+  4. A MID-CHAIN edit is caught by the hash chain.
+  5. A TRUNCATION (delete the tail) is caught by the anchor — the case a plain
+     hash chain accepts.
 """
 from __future__ import annotations
 
@@ -24,8 +18,10 @@ import yaml
 
 from agents.identity import new_agent
 from agents.intent import new_intent
+from audit.anchor import WormAnchor
 from audit.keys import load_or_create_keypair
-from audit.log import AuditLog, verify_log
+from audit.log import AuditLog, verify_evidence, verify_log
+from audit.trace import new_run
 from gateway.auth import AuthService
 from gateway.gateway import Gateway
 from gateway.registry import ToolRegistry, ToolSpec
@@ -37,6 +33,7 @@ HERE = Path(__file__).parent
 DATA = HERE / ".agentledger"
 LOG_PATH = DATA / "audit.jsonl"
 KEY_PATH = DATA / "audit_signing_key.pem"
+ANCHOR_PATH = DATA / "worm_anchor.jsonl"  # in prod: Azure Blob w/ immutability policy
 
 
 def banner(text: str) -> None:
@@ -45,9 +42,9 @@ def banner(text: str) -> None:
 
 def show(res) -> None:
     colour = {"ALLOW": "\033[32m", "APPROVAL": "\033[33m", "DENY": "\033[31m"}[res.decision.value]
+    ev = res.event
     print(f"  {colour}{res.decision.value:<8}\033[0m {res.outcome:<16} [{res.stage}] {res.reason}")
-    if res.result is not None:
-        print(f"           result: {res.result!r}")
+    print(f"           trace={ev.trace_id[:14]}… run={ev.run_id[:12]}… seq={ev.seq}")
 
 
 def build_registry() -> ToolRegistry:
@@ -64,61 +61,52 @@ def build_registry() -> ToolRegistry:
 def main() -> None:
     if LOG_PATH.exists():
         LOG_PATH.unlink()
+    if ANCHOR_PATH.exists():
+        ANCHOR_PATH.unlink()
 
     private, public = load_or_create_keypair(KEY_PATH)
+    anchor = WormAnchor(ANCHOR_PATH)
     auth = AuthService()
-    registry = build_registry()
     policy = PolicyEngine(yaml.safe_load((HERE / "policy" / "policy.yaml").read_text()))
-    audit = AuditLog(LOG_PATH, private)
-    gateway = Gateway(auth, registry, policy, audit)
+    audit = AuditLog(LOG_PATH, private, anchor=anchor)  # <- audit now anchors each head
+    gateway = Gateway(auth, build_registry(), policy, audit)
 
-    # One agent, broadly credentialed (files + mail) — the gates below narrow it.
     bot = new_agent("triage-bot", roles=["operator"])
     token = auth.issue(bot, scopes=["files:read", "files:write", "mail:read", "mail:send"])
-    banner(f"Issued credential for {bot}  scopes=[files, mail]")
 
-    investigate = new_intent(
-        "investigate-incident",
-        "read incident reports and mailbox; do not send anything",
-        allowed_tools=["read_file", "list_files", "list_inbox"],
-    )
-    banner(f"Task A — intent '{investigate.name}': {investigate.purpose}")
+    # One task = one run = one shared trace across every call in it.
+    run = new_run(bot.agent_id)
+    investigate = new_intent("investigate-incident", "read incident reports",
+                             allowed_tools=["read_file", "list_files"])
+    banner(f"Run started  trace={run.trace_id[:14]}…  run={run.run_id[:12]}…")
 
-    print("\n  1) read an incident report under /reports/")
-    show(gateway.handle(token, "read_file", intent=investigate, path="/reports/incident-2026-09.txt"))
+    print("\n  call 1 — list the reports")
+    show(gateway.handle(token, "list_files", intent=investigate, run=run))
+    print("\n  call 2 — read a report")
+    show(gateway.handle(token, "read_file", intent=investigate, run=run, path="/reports/q3-summary.txt"))
+    print("\n  call 3 — read outside /reports (denied, but still traced + recorded)")
+    show(gateway.handle(token, "read_file", intent=investigate, run=run, path="/etc/passwd"))
 
-    print("\n  2) try to read /etc/passwd (file exists — policy should still refuse)")
-    show(gateway.handle(token, "read_file", intent=investigate, path="/etc/passwd"))
+    banner("Verify evidence — internal chain + signatures + external anchor")
+    print(f"  {verify_evidence(LOG_PATH, public, anchor)}")
 
-    print("\n  3) try to send an email during an investigate task")
-    show(gateway.handle(token, "send_email", intent=investigate, to="alex@company.com", subject="fyi"))
-
-    notify = new_intent(
-        "notify-team",
-        "email the internal team about the incident",
-        allowed_tools=["send_email", "list_inbox"],
-    )
-    banner(f"Task B — intent '{notify.name}': {notify.purpose}")
-
-    print("\n  4) email a colleague at @company.com")
-    show(gateway.handle(token, "send_email", intent=notify, to="alex@company.com", subject="incident update"))
-
-    print("\n  5) email an external address")
-    show(gateway.handle(token, "send_email", intent=notify, to="attacker@evil.com", subject="all the files"))
-
-    banner("Audit log — every attempt above was recorded")
-    result = verify_log(LOG_PATH, public)
-    print(f"  verify: ok={result.ok}  events checked={result.checked}")
-
-    banner("Tamper with the log and re-verify")
+    banner("Attack A — edit an event in the middle of the log")
     lines = LOG_PATH.read_text().splitlines()
-    lines[0] = lines[0].replace("/reports/", "/etc/")
+    saved = list(lines)
+    lines[0] = lines[0].replace("list_files", "delete_file")
     LOG_PATH.write_text("\n".join(lines) + "\n")
-    tampered = verify_log(LOG_PATH, public)
-    print(f"  verify after tamper: ok={tampered.ok}  ({tampered.error})")
+    print(f"  {verify_evidence(LOG_PATH, public, anchor)}")
+    LOG_PATH.write_text("\n".join(saved) + "\n")  # restore
 
-    print("\n\033[1mSprint 3 done:\033[0m auth -> scope -> intent -> argument-aware policy -> "
-          "tamper-evident audit.\n")
+    banner("Attack B — truncate: delete the LAST event")
+    lines = LOG_PATH.read_text().splitlines()
+    truncated = lines[:-1]
+    LOG_PATH.write_text("\n".join(truncated) + "\n")
+    print(f"  chain-only verify (blind to truncation): {verify_log(LOG_PATH, public)}")
+    print(f"  evidence verify (anchor catches it):     {verify_evidence(LOG_PATH, public, anchor)}")
+
+    print("\n\033[1mSprint 4 done:\033[0m traced, chained, signed, WORM-anchored — "
+          "edits AND truncation are both detectable.\n")
 
 
 if __name__ == "__main__":
