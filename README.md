@@ -83,9 +83,30 @@ pip install pytest && pytest -q      # the guarantees as tests
 - **S2 · Gateway & identity** ✅ — token auth, tool registry, scoped credentials, revocation
 - **S3 · Policy & intent** ✅ — intent scoping (task boundary) + per-parameter policy conditions
 - **S4 · Evidence** ✅ — trace/run/agent IDs, chain head anchored to a WORM witness, truncation detection
-- **S5 · Approval & dashboard** ✅ — human-in-the-loop approval service + control-plane dashboard *(this)*
-- **S6 · Killer demo** *(stretch)* — real Entra / Defender / Intune MCP tools: *"Investigate Defender incident 12345"* end-to-end
-- **S7 · Harden & ship** — red-team, Definition of Done, landing page
+- **S5 · Approval & dashboard** ✅ — human-in-the-loop approval service + control-plane dashboard
+- **S6 · Red-team lab** ✅ — 12 adversary techniques fired at the live gateway, all defended *(this)*
+- **S7 · Real integrations** — Entra / Defender / Intune MCP tools: *"Investigate Defender incident 12345"* end-to-end
+- **Research track** — adversarial ML, robustness, neural-network verification (kept out of the enforcement path)
+
+---
+
+## 🎯 Red-team lab
+
+AgentLedger doesn't just *claim* to resist attacks — it's fired at. The red-team lab (`attacks/`) runs 12 adversary techniques through the **live gateway** and reports where each one is stopped:
+
+```bash
+python redteam.py      # runs the attacks, writes redteam-report.html
+```
+
+| Class | Techniques | Stopped at |
+|---|---|---|
+| Broken authentication | forged identity · revoked replay · expired reuse | **auth** |
+| Excessive agency (LLM06) | privilege escalation · cross-scope · malicious tool | **scope / registry** |
+| Prompt injection (LLM01) | direct · indirect (poisoned data) | **intent** |
+| Sensitive-info disclosure (LLM02) | path exfiltration · external recipient | **policy** |
+| Repudiation / tampering | audit edit · truncation | **evidence** |
+
+**12/12 defended.** Each attack is also a regression test (`tests/security/`), so a future change that opens a hole fails the build. Techniques map to the **OWASP Top 10 for LLM Applications**.
 
 ---
 
