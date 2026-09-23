@@ -2,6 +2,9 @@
 .agentledger/
 *.pem
 
+# Generated control-plane dashboard (rebuilt by `python demo.py` / `python dashboard.py`)
+dashboard.html
+
 # Python
 __pycache__/
 *.py[cod]

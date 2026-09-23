@@ -38,9 +38,13 @@ Every call runs inside a **RunContext** (`trace_id` / `run_id` / `agent_id`), so
 | **Conditions** | Per-parameter constraints (`starts_with`, `ends_with`, `in`, `matches`…) | `policy/conditions.py` |
 | **Trace context** | `trace_id` / `run_id` / `agent_id` per task — the OpenTelemetry model for agent actions | `audit/trace.py` |
 | **WORM anchor** | External immutable witness of the chain head — detects **truncation** | `audit/anchor.py` |
+| **Approval service** | Holds consequential actions for a **human**; approve executes, deny blocks — both audited | `approvals/store.py` |
+| **Control-plane dashboard** | Self-contained HTML: agents, runs, decisions, approvals queue, audit explorer | `dashboard.py` |
 | **MCP Gateway** | The single boundary: authn → scope → intent → policy → execute → audit | `gateway/gateway.py` |
 | **Tamper-evident audit** | SHA-256 **hash chain** + **Ed25519** signatures + anchoring | `audit/log.py` |
 | **Fake MCP servers** | Files + mail — two backends to route between | `mcp_servers/` |
+
+**Human in the loop, by consequence.** Routine actions flow straight through; only what policy marks **APPROVAL** (destructive or sensitive) is *held* — not run — until a person decides. Approve and it executes, audited as `approved by <person>`; deny and it's blocked, audited as `denied by <person>`. Escalating *every* step would just train reviewers to rubber-stamp, so escalation is by consequence, not by count. Running `python demo.py` also generates a self-contained **`dashboard.html`** — the control plane a security team watches: agent fleet, runs, every decision, the approvals queue, and a searchable audit explorer.
 
 **Why the anchor matters.** A hash chain proves the log wasn't edited in the middle — but on its own it can't catch **truncation**: delete the last few events and the shorter chain still verifies clean. AgentLedger writes each new chain head to an external append-only witness (a local file in the MVP; an **Azure Blob container with an immutability/WORM policy** in production). Verification then compares the log's head to the witness: if the anchor knows a sequence number the log no longer contains, the log was truncated. The two live in different trust domains, so compromising one doesn't compromise the other.
 
@@ -78,8 +82,8 @@ pip install pytest && pytest -q      # the guarantees as tests
 - **S1 · Foundations** ✅ — repo, gateway, policy, tamper-evident audit
 - **S2 · Gateway & identity** ✅ — token auth, tool registry, scoped credentials, revocation
 - **S3 · Policy & intent** ✅ — intent scoping (task boundary) + per-parameter policy conditions
-- **S4 · Evidence** ✅ — trace/run/agent IDs, chain head anchored to a WORM witness, truncation detection *(this)*
-- **S5 · Approval & dashboard** — human-in-the-loop service + console
+- **S4 · Evidence** ✅ — trace/run/agent IDs, chain head anchored to a WORM witness, truncation detection
+- **S5 · Approval & dashboard** ✅ — human-in-the-loop approval service + control-plane dashboard *(this)*
 - **S6 · Killer demo** *(stretch)* — real Entra / Defender / Intune MCP tools: *"Investigate Defender incident 12345"* end-to-end
 - **S7 · Harden & ship** — red-team, Definition of Done, landing page
 
