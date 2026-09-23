@@ -1,17 +1,21 @@
-# AgentLedger policy — default deny.
-# A tool call is ALLOWed only if a role of the calling agent lists it under
-# `allow`. Destructive tools go under `approval`, so they are held for a human
-# instead of being refused outright. Anything not mentioned is denied.
+# AgentLedger policy — default deny, now argument-aware (Sprint 3).
+# A rule grants its effect only when its `where` conditions hold. Anything not
+# explicitly granted is denied.
 
 roles:
   reader:
-    allow:
-      - list_files
-      - read_file
+    rules:
+      - { tool: list_files, effect: allow }
+      - { tool: read_file,  effect: allow, where: { path: { starts_with: "/reports/" } } }
+      - { tool: list_inbox, effect: allow }
 
   operator:
-    allow:
-      - list_files
-      - read_file
-    approval:
-      - delete_file      # destructive: never runs without a human in the loop
+    rules:
+      - { tool: list_files, effect: allow }
+      # read only inside /reports/ — never /etc, /secrets, anywhere else
+      - { tool: read_file,  effect: allow,    where: { path: { starts_with: "/reports/" } } }
+      # deleting is destructive AND path-bounded: approval, and only under /reports/
+      - { tool: delete_file, effect: approval, where: { path: { starts_with: "/reports/" } } }
+      - { tool: list_inbox, effect: allow }
+      # outbound mail needs approval, and only to internal recipients
+      - { tool: send_email, effect: approval, where: { to: { ends_with: "@company.com" } } }

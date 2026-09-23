@@ -27,9 +27,13 @@ class FakeMCPServer:
     """Minimal MCP-like tool host: a named registry the gateway can route into."""
 
     def __init__(self) -> None:
+        # /etc/passwd exists and is readable — so when the gateway refuses to
+        # read it, that's *policy* stopping the call, not a missing file. That's
+        # the point of the per-parameter demo.
         self._files: dict[str, str] = {
-            "notes.txt": "hello from the fake filesystem",
-            "budget.csv": "item,amount\ncoffee,4.50",
+            "/reports/incident-2026-09.txt": "summary: anomalous sign-in from 10.0.0.5",
+            "/reports/q3-summary.txt": "revenue up 4%; no security incidents",
+            "/etc/passwd": "root:x:0:0:root:/root:/bin/bash",
         }
         self._tools: dict[str, Tool] = {}
         self._register_defaults()

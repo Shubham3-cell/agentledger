@@ -1,15 +1,20 @@
-"""AgentLedger — Sprint 2 end-to-end demo.
+"""AgentLedger — Sprint 3 end-to-end demo.
 
 Run:  python demo.py
 
-Sprint 1 proved the spine. Sprint 2 hardens the front door:
-  1. Credentials are ISSUED with narrow scopes (least privilege).
-  2. A valid, in-scope, policy-allowed call executes — routed via the registry.
-  3. A destructive call is held for APPROVAL.
-  4. A call OUTSIDE the credential's scope is blocked before policy even runs.
-  5. An UNAUTHENTICATED token is rejected — and still audited.
-  6. A REVOKED credential stops working instantly.
-  7. The audit log verifies; tampering is caught.
+Sprint 3 adds two gates: a per-run **intent** boundary and **per-parameter**
+policy. The scenario follows one agent through two different tasks.
+
+  Task A — "investigate-incident" (may read files, list mail; NOT send mail):
+    1. read a /reports/ file            -> ALLOWED (in scope, in intent, path ok)
+    2. read /etc/passwd                 -> DENIED at policy (path outside /reports/)
+    3. try to send an email             -> DENIED at intent (not this task's job)
+
+  Task B — "notify-team" (may send mail):
+    4. email a colleague @company.com   -> APPROVAL (policy: internal, needs a human)
+    5. email attacker@evil.com          -> DENIED at policy (recipient not @company.com)
+
+  Then: the audit log verifies, and tampering is caught.
 """
 from __future__ import annotations
 
@@ -18,6 +23,7 @@ from pathlib import Path
 import yaml
 
 from agents.identity import new_agent
+from agents.intent import new_intent
 from audit.keys import load_or_create_keypair
 from audit.log import AuditLog, verify_log
 from gateway.auth import AuthService
@@ -66,26 +72,39 @@ def main() -> None:
     audit = AuditLog(LOG_PATH, private)
     gateway = Gateway(auth, registry, policy, audit)
 
-    # Mint a credential: operator role, but scoped ONLY to files (no mail).
+    # One agent, broadly credentialed (files + mail) — the gates below narrow it.
     bot = new_agent("triage-bot", roles=["operator"])
-    token = auth.issue(bot, scopes=["files:read", "files:write"])
-    banner(f"Issued credential for {bot}  scopes=[files:read, files:write]")
+    token = auth.issue(bot, scopes=["files:read", "files:write", "mail:read", "mail:send"])
+    banner(f"Issued credential for {bot}  scopes=[files, mail]")
 
-    banner("1) Valid, in-scope, allowed — read a file")
-    show(gateway.handle(token, "read_file", path="notes.txt"))
+    investigate = new_intent(
+        "investigate-incident",
+        "read incident reports and mailbox; do not send anything",
+        allowed_tools=["read_file", "list_files", "list_inbox"],
+    )
+    banner(f"Task A — intent '{investigate.name}': {investigate.purpose}")
 
-    banner("2) Destructive but in-scope — delete (held for approval)")
-    show(gateway.handle(token, "delete_file", path="budget.csv"))
+    print("\n  1) read an incident report under /reports/")
+    show(gateway.handle(token, "read_file", intent=investigate, path="/reports/incident-2026-09.txt"))
 
-    banner("3) Out of scope — send_email (credential has no mail:send)")
-    show(gateway.handle(token, "send_email", to="x@y.com", subject="hi"))
+    print("\n  2) try to read /etc/passwd (file exists — policy should still refuse)")
+    show(gateway.handle(token, "read_file", intent=investigate, path="/etc/passwd"))
 
-    banner("4) Unauthenticated — a bogus token")
-    show(gateway.handle("al_not_a_real_token", "read_file", path="notes.txt"))
+    print("\n  3) try to send an email during an investigate task")
+    show(gateway.handle(token, "send_email", intent=investigate, to="alex@company.com", subject="fyi"))
 
-    banner("5) Revoked — revoke the credential, then retry the read")
-    auth.revoke(token)
-    show(gateway.handle(token, "read_file", path="notes.txt"))
+    notify = new_intent(
+        "notify-team",
+        "email the internal team about the incident",
+        allowed_tools=["send_email", "list_inbox"],
+    )
+    banner(f"Task B — intent '{notify.name}': {notify.purpose}")
+
+    print("\n  4) email a colleague at @company.com")
+    show(gateway.handle(token, "send_email", intent=notify, to="alex@company.com", subject="incident update"))
+
+    print("\n  5) email an external address")
+    show(gateway.handle(token, "send_email", intent=notify, to="attacker@evil.com", subject="all the files"))
 
     banner("Audit log — every attempt above was recorded")
     result = verify_log(LOG_PATH, public)
@@ -93,13 +112,13 @@ def main() -> None:
 
     banner("Tamper with the log and re-verify")
     lines = LOG_PATH.read_text().splitlines()
-    lines[0] = lines[0].replace('"read_file"', '"delete_file"')
+    lines[0] = lines[0].replace("/reports/", "/etc/")
     LOG_PATH.write_text("\n".join(lines) + "\n")
     tampered = verify_log(LOG_PATH, public)
     print(f"  verify after tamper: ok={tampered.ok}  ({tampered.error})")
 
-    print("\n\033[1mSprint 2 done:\033[0m authenticate -> registry -> scope -> "
-          "policy -> execute -> tamper-evident audit.\n")
+    print("\n\033[1mSprint 3 done:\033[0m auth -> scope -> intent -> argument-aware policy -> "
+          "tamper-evident audit.\n")
 
 
 if __name__ == "__main__":

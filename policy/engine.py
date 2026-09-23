@@ -1,16 +1,22 @@
-"""Policy engine — the heart of AgentLedger.
+"""Policy engine — deterministic ALLOW / DENY / APPROVAL, now argument-aware.
 
-One rule above all: **default deny**. If nothing explicitly allows a tool call,
-the answer is DENY. On top of that, some tools are allowed outright and some are
-allowed only *with a human approval*.
+Sprint 3 upgrades rules from "tool -> effect" to "tool + argument conditions ->
+effect". A rule grants an effect only when its per-parameter conditions hold, so
+policy can say "read_file is allowed, but only under /reports/" or "send_email
+needs approval, and only to @company.com".
 
-A decision is deterministic: same (agent, tool, params) in, same decision out.
-That determinism is what makes the audit trail meaningful later — you can always
-explain *why* a call was allowed or blocked.
+Rules shape (per role)::
 
-The MVP reads rules from a plain dict (loaded from policy.yaml in the demo).
-Sprint 3 deepens this with intent scoping and per-parameter conditions; the
-ALLOW / DENY / APPROVAL contract stays exactly this.
+    roles:
+      operator:
+        rules:
+          - { tool: read_file,  effect: allow,    where: { path: { starts_with: "/reports/" } } }
+          - { tool: delete_file, effect: approval, where: { path: { starts_with: "/reports/" } } }
+
+Precedence: any satisfied ALLOW wins; else any satisfied APPROVAL; else DENY.
+Default deny still holds — nothing runs unless a rule explicitly grants it. When
+a rule matches the tool but its conditions fail, the denial names the failing
+argument, so the audit log explains *why*, not just *that*.
 """
 from __future__ import annotations
 
@@ -18,6 +24,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from agents.identity import Agent
+from policy.conditions import check_conditions
 
 
 class Decision(str, Enum):
@@ -33,45 +40,38 @@ class PolicyResult:
 
 
 class PolicyEngine:
-    """Deterministic ALLOW / DENY / APPROVAL decisions. Default deny.
-
-    Rules shape::
-
-        {
-          "roles": {
-            "reader":  {"allow": ["list_files", "read_file"]},
-            "operator": {"allow": ["list_files", "read_file"],
-                         "approval": ["delete_file"]},
-          }
-        }
-
-    A tool is ALLOWed if any of the agent's roles allow it. Otherwise, if any
-    role marks it for approval, the decision is APPROVAL. Otherwise DENY.
-    """
-
     def __init__(self, rules: dict) -> None:
         self._roles: dict = rules.get("roles", {})
 
     def evaluate(self, agent: Agent, tool: str, params: dict | None = None) -> PolicyResult:
-        allowed_by: list[str] = []
-        approval_by: list[str] = []
+        params = params or {}
+        allow_reason: str | None = None
+        approval_reason: str | None = None
+        condition_failures: list[str] = []
 
         for role in agent.roles:
-            spec = self._roles.get(role, {})
-            if tool in spec.get("allow", []):
-                allowed_by.append(role)
-            if tool in spec.get("approval", []):
-                approval_by.append(role)
+            for rule in self._roles.get(role, {}).get("rules", []):
+                if rule.get("tool") != tool:
+                    continue
+                ok, detail = check_conditions(rule.get("where", {}), params)
+                if not ok:
+                    condition_failures.append(f"[{role}] {detail}")
+                    continue
+                effect = rule.get("effect", "deny")
+                note = f" ({detail})" if rule.get("where") else ""
+                if effect == "allow" and allow_reason is None:
+                    allow_reason = f"'{tool}' allowed by role '{role}'{note}"
+                elif effect == "approval" and approval_reason is None:
+                    approval_reason = f"'{tool}' requires approval — role '{role}'{note}"
 
-        if allowed_by:
+        if allow_reason:
+            return PolicyResult(Decision.ALLOW, allow_reason)
+        if approval_reason:
+            return PolicyResult(Decision.APPROVAL, approval_reason)
+        if condition_failures:
             return PolicyResult(
-                Decision.ALLOW,
-                f"'{tool}' allowed by role(s): {', '.join(allowed_by)}",
-            )
-        if approval_by:
-            return PolicyResult(
-                Decision.APPROVAL,
-                f"'{tool}' requires human approval (role(s): {', '.join(approval_by)})",
+                Decision.DENY,
+                f"'{tool}' argument not permitted: {'; '.join(condition_failures)}",
             )
         return PolicyResult(
             Decision.DENY,

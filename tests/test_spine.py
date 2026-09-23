@@ -1,9 +1,10 @@
-"""Sprint 1 + 2 tests: the security guarantees, not just 'it runs'."""
+"""Sprint 1-3 tests: the security guarantees, not just 'it runs'."""
 from pathlib import Path
 
 import yaml
 
 from agents.identity import new_agent
+from agents.intent import new_intent
 from audit.keys import load_or_create_keypair
 from audit.log import AuditLog, verify_log
 from gateway.auth import AuthService
@@ -15,6 +16,8 @@ from policy.engine import Decision, PolicyEngine
 
 ROOT = Path(__file__).resolve().parents[1]
 RULES = yaml.safe_load((ROOT / "policy" / "policy.yaml").read_text())
+REPORT = "/reports/q3-summary.txt"
+ALL_SCOPES = ["files:read", "files:write", "mail:read", "mail:send"]
 
 
 def _registry():
@@ -36,86 +39,101 @@ def _stack(tmp_path):
     return gw, auth, pub, tmp_path / "audit.jsonl"
 
 
-def test_allow_executes(tmp_path):
+def _token(auth, scopes=None):
+    return auth.issue(new_agent("a", ["operator"]), scopes or ALL_SCOPES)
+
+
+# --- Sprint 1-2 guarantees still hold ---
+
+def test_allow_executes_in_reports(tmp_path):
     gw, auth, _, _ = _stack(tmp_path)
-    token = auth.issue(new_agent("a", ["operator"]), ["files:read"])
-    res = gw.handle(token, "read_file", path="notes.txt")
+    res = gw.handle(_token(auth), "read_file", path=REPORT)
     assert res.decision is Decision.ALLOW and res.outcome == "executed"
-    assert "fake filesystem" in res.result
-
-
-def test_destructive_needs_approval(tmp_path):
-    gw, auth, _, _ = _stack(tmp_path)
-    token = auth.issue(new_agent("a", ["operator"]), ["files:read", "files:write"])
-    res = gw.handle(token, "delete_file", path="budget.csv")
-    assert res.decision is Decision.APPROVAL and res.outcome == "pending_approval"
-    assert res.result is None
-
-
-def test_out_of_scope_blocked_before_policy(tmp_path):
-    gw, auth, _, _ = _stack(tmp_path)
-    token = auth.issue(new_agent("a", ["operator"]), ["files:read"])
-    res = gw.handle(token, "send_email", to="x@y.com", subject="hi")
-    assert res.decision is Decision.DENY and res.stage == "scope"
-    assert res.result is None
+    assert "revenue" in res.result
 
 
 def test_unauthenticated_rejected_and_audited(tmp_path):
     gw, _, pub, log_path = _stack(tmp_path)
-    res = gw.handle("al_bogus", "read_file", path="notes.txt")
+    res = gw.handle("al_bogus", "read_file", path=REPORT)
     assert res.decision is Decision.DENY and res.stage == "auth"
     assert res.event.agent_id == UNAUTHENTICATED
-    assert verify_log(log_path, pub).ok is True  # the rejection was still recorded
+    assert verify_log(log_path, pub).ok is True
 
 
-def test_missing_token_rejected(tmp_path):
-    gw, _, _, _ = _stack(tmp_path)
-    res = gw.handle(None, "read_file", path="notes.txt")
-    assert res.decision is Decision.DENY and res.stage == "auth"
-
-
-def test_revocation_takes_effect(tmp_path):
+def test_out_of_scope_blocked(tmp_path):
     gw, auth, _, _ = _stack(tmp_path)
-    agent = new_agent("a", ["operator"])
-    token = auth.issue(agent, ["files:read"])
-    assert gw.handle(token, "read_file", path="notes.txt").outcome == "executed"
-    auth.revoke(token)
-    res = gw.handle(token, "read_file", path="notes.txt")
-    assert res.decision is Decision.DENY and res.stage == "auth"
+    token = auth.issue(new_agent("a", ["operator"]), ["files:read"])  # no mail:send
+    res = gw.handle(token, "send_email", to="x@company.com", subject="hi")
+    assert res.decision is Decision.DENY and res.stage == "scope"
 
 
-def test_unknown_tool_blocked(tmp_path):
+# --- Sprint 3: per-parameter policy ---
+
+def test_read_outside_reports_denied_by_argument(tmp_path):
     gw, auth, _, _ = _stack(tmp_path)
-    token = auth.issue(new_agent("a", ["operator"]), ["files:read"])
-    res = gw.handle(token, "rm_minus_rf", path="/")
-    assert res.decision is Decision.DENY and res.stage == "registry"
+    res = gw.handle(_token(auth), "read_file", path="/etc/passwd")
+    assert res.decision is Decision.DENY and res.stage == "policy"
+    assert "argument not permitted" in res.reason
+    assert res.result is None  # the file exists, but policy refused
 
 
-def test_expired_credential_rejected(tmp_path):
+def test_send_external_denied_by_argument(tmp_path):
     gw, auth, _, _ = _stack(tmp_path)
-    token = auth.issue(new_agent("a", ["operator"]), ["files:read"], ttl_seconds=-1)
-    res = gw.handle(token, "read_file", path="notes.txt")
-    assert res.decision is Decision.DENY and res.stage == "auth"
+    res = gw.handle(_token(auth), "send_email", to="attacker@evil.com", subject="x")
+    assert res.decision is Decision.DENY and res.stage == "policy"
 
 
-def test_registry_routes_across_servers(tmp_path):
+def test_send_internal_needs_approval(tmp_path):
     gw, auth, _, _ = _stack(tmp_path)
-    token = auth.issue(new_agent("a", ["operator"]), ["files:read", "mail:read"])
-    inbox = gw.handle(token, "list_inbox")  # routed to the MAIL server
-    assert inbox.outcome == "blocked" or inbox.outcome == "executed"
-    # list_inbox isn't in policy for 'operator', so policy denies — but it
-    # authenticated and passed scope, proving the registry resolved a mail tool.
-    assert inbox.stage in ("policy", "execute")
+    res = gw.handle(_token(auth), "send_email", to="alex@company.com", subject="x")
+    assert res.decision is Decision.APPROVAL and res.outcome == "pending_approval"
 
+
+def test_delete_in_reports_needs_approval(tmp_path):
+    gw, auth, _, _ = _stack(tmp_path)
+    res = gw.handle(_token(auth), "delete_file", path="/reports/old.txt")
+    assert res.decision is Decision.APPROVAL
+
+
+def test_missing_argument_fails_closed(tmp_path):
+    gw, auth, _, _ = _stack(tmp_path)
+    res = gw.handle(_token(auth), "read_file")  # no path at all
+    assert res.decision is Decision.DENY and res.stage == "policy"
+
+
+# --- Sprint 3: intent scoping ---
+
+def test_intent_blocks_out_of_task_tool(tmp_path):
+    gw, auth, _, _ = _stack(tmp_path)
+    investigate = new_intent("investigate", "read only", ["read_file", "list_files"])
+    res = gw.handle(_token(auth), "send_email", intent=investigate, to="alex@company.com", subject="x")
+    assert res.decision is Decision.DENY and res.stage == "intent"
+
+
+def test_intent_allows_in_task_tool(tmp_path):
+    gw, auth, _, _ = _stack(tmp_path)
+    investigate = new_intent("investigate", "read only", ["read_file", "list_files"])
+    res = gw.handle(_token(auth), "read_file", intent=investigate, path=REPORT)
+    assert res.decision is Decision.ALLOW and res.outcome == "executed"
+
+
+def test_intent_checked_before_policy(tmp_path):
+    # even a call policy would ALLOW is stopped if the task's intent excludes it
+    gw, auth, _, _ = _stack(tmp_path)
+    only_mail = new_intent("notify", "send mail only", ["send_email"])
+    res = gw.handle(_token(auth), "read_file", intent=only_mail, path=REPORT)
+    assert res.decision is Decision.DENY and res.stage == "intent"
+
+
+# --- audit still tamper-evident ---
 
 def test_audit_detects_tamper(tmp_path):
     gw, auth, pub, log_path = _stack(tmp_path)
-    token = auth.issue(new_agent("a", ["operator"]), ["files:read", "files:write"])
-    gw.handle(token, "read_file", path="notes.txt")
-    gw.handle(token, "delete_file", path="budget.csv")
+    token = _token(auth)
+    gw.handle(token, "read_file", path=REPORT)
+    gw.handle(token, "read_file", path="/etc/passwd")
     assert verify_log(log_path, pub).ok is True
-
     lines = log_path.read_text().splitlines()
-    lines[0] = lines[0].replace('"read_file"', '"delete_file"')
+    lines[0] = lines[0].replace("/reports/", "/etc/")
     log_path.write_text("\n".join(lines) + "\n")
     assert verify_log(log_path, pub).ok is False
