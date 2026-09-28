@@ -20,3 +20,6 @@ venv/
 
 # Generated red-team report
 redteam-report.html
+
+# Local Entra lab credentials — never commit
+lab_secrets.py

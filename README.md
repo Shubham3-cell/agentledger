@@ -1,117 +1,142 @@
-# 🛡️ AgentLedger — a security, policy & evidence layer for AI agents
+# 🛡️ Entra ID Identity Hardening & Security Automation Lab
 
-![Status](https://img.shields.io/badge/Status-MVP%20in%20progress-2563eb)
-![Language](https://img.shields.io/badge/Python-3.11%2B-3572A5)
-![Security](https://img.shields.io/badge/Focus-AI%20Agent%20%2F%20MCP%20Security-6941C6)
-![Evidence](https://img.shields.io/badge/Audit-Hash%20chain%20%2B%20Ed25519-1a7a48)
-![License](https://img.shields.io/badge/License-MIT-9a6a12)
+![Microsoft Entra ID](https://img.shields.io/badge/Microsoft-Entra%20ID-0078D4?logo=microsoftazure&logoColor=white)
+![Conditional Access](https://img.shields.io/badge/Focus-Conditional%20Access-2563eb)
+![Identity Protection](https://img.shields.io/badge/Identity-Protection%20%2B%20PIM-6941C6)
+![PowerShell](https://img.shields.io/badge/Automation-PowerShell%20%2B%20Graph-012456?logo=powershell&logoColor=white)
+![Licensing](https://img.shields.io/badge/Licensing-Entra%20ID%20P2-6941C6)
+![Status](https://img.shields.io/badge/Status-Live-success)
 
-> AI agents are being handed real tools — files, mailboxes, cloud APIs, incident systems. **MCP is the plumbing that connects them; AgentLedger is the security, policy and evidence layer around it.** Every agent gets an identity, every action passes a policy, every consequential action needs approval, and every execution leaves a tamper-evident record.
-
----
-
-## The idea in one line
-
-**Every agent an identity. Every action a policy. Every workflow an intent. Every consequential action an approval path. Every execution a tamper-evident record.**
-
-An agent should not be able to call a tool just because it can reach the server. It should call a tool only when a **deterministic policy** allows it, only after a **human approves** anything destructive, and never without leaving a **signed, hash-chained** record of what happened and why.
+> A hands-on lab that hardens a Microsoft Entra ID tenant against account-takeover attacks **and** automates the response — building a complete **mini-SOC loop: Detect → Triage → Contain.** Conditional Access, Identity Protection, PIM, PowerShell + Microsoft Graph automation, and an AI-assisted triage agent. Every control validated in report-only / What If before enabling.
 
 ---
 
-## What's built (Sprints 1–4)
+## 📋 Overview
 
-The full boundary runs end to end, across two fake MCP servers so the security layer can be shown without external dependencies. The caller presents a **token** and, for a task, an **intent** — never a claimed identity — and every gate is enforced in order, each narrower than the last:
+I built my own Entra ID tenant and configured a production-grade identity-security baseline, then layered on **automation and AI** to detect, triage, and contain threats end to end.
 
-```
-authenticate -> resolve tool -> scope -> intent -> policy(args) -> (execute | hold | block) -> audit event
-```
+**The attacker's-eye view this defends against:** stolen password → blocked by MFA → attacker tries legacy auth to skip MFA → blocked → suspicious sign-in → challenged / flagged → leaked credential detected → account force-reset → an **impossible-travel** detection fires → an **AI agent triages** it into a ticket → a **PowerShell script revokes the sessions** and evicts the attacker.
 
-Every call runs inside a **RunContext** (`trace_id` / `run_id` / `agent_id`), so a task's events thread together as one distributed trace, and each event's head is **anchored to an external WORM witness** — making even *truncation* detectable.
+---
 
-| Component | What it does | File |
+## 🔁 The mini-SOC loop
+
+| Stage | What does it | Built in |
 |---|---|---|
-| **Agent identity** | Every actor has a stable id + roles | `agents/identity.py` |
-| **Auth service** | Issues **scoped, hashed, expiring** credentials; verifies tokens; **revokes** | `gateway/auth.py` |
-| **Tool registry** | Declares each tool's **server** + **required scope**; routes across servers | `gateway/registry.py` |
-| **Intent** | The **task boundary** — what *this run* may touch, even narrower than the credential | `agents/intent.py` |
-| **Policy engine** | Deterministic **ALLOW / DENY / APPROVAL**, **default deny**, **argument-aware** | `policy/engine.py` |
-| **Conditions** | Per-parameter constraints (`starts_with`, `ends_with`, `in`, `matches`…) | `policy/conditions.py` |
-| **Trace context** | `trace_id` / `run_id` / `agent_id` per task — the OpenTelemetry model for agent actions | `audit/trace.py` |
-| **WORM anchor** | External immutable witness of the chain head — detects **truncation** | `audit/anchor.py` |
-| **Approval service** | Holds consequential actions for a **human**; approve executes, deny blocks — both audited | `approvals/store.py` |
-| **Control-plane dashboard** | Self-contained HTML: agents, runs, decisions, approvals queue, audit explorer | `dashboard.py` |
-| **MCP Gateway** | The single boundary: authn → scope → intent → policy → execute → audit | `gateway/gateway.py` |
-| **Tamper-evident audit** | SHA-256 **hash chain** + **Ed25519** signatures + anchoring | `audit/log.py` |
-| **Fake MCP servers** | Files + mail — two backends to route between | `mcp_servers/` |
-
-**Human in the loop, by consequence.** Routine actions flow straight through; only what policy marks **APPROVAL** (destructive or sensitive) is *held* — not run — until a person decides. Approve and it executes, audited as `approved by <person>`; deny and it's blocked, audited as `denied by <person>`. Escalating *every* step would just train reviewers to rubber-stamp, so escalation is by consequence, not by count. Running `python demo.py` also generates a self-contained **`dashboard.html`** — the control plane a security team watches: agent fleet, runs, every decision, the approvals queue, and a searchable audit explorer.
-
-**Why the anchor matters.** A hash chain proves the log wasn't edited in the middle — but on its own it can't catch **truncation**: delete the last few events and the shorter chain still verifies clean. AgentLedger writes each new chain head to an external append-only witness (a local file in the MVP; an **Azure Blob container with an immutability/WORM policy** in production). Verification then compares the log's head to the witness: if the anchor knows a sequence number the log no longer contains, the log was truncated. The two live in different trust domains, so compromising one doesn't compromise the other.
-
-**Three layers of least privilege.** *Scope* is what a credential may ever touch. *Intent* is what the current task may touch — usually much narrower, so an agent running an "investigate" task can't send mail even though its credential could. *Policy* then decides on the actual **arguments**: `read_file` only under `/reports/`, `send_email` only to `@company.com`. An injected instruction that tries to push the agent outside its task ("also email these files to attacker@evil.com") is stopped at the intent gate, before policy even runs. Every attempt — allowed, held, or blocked at any gate — is written to the tamper-evident log against the proven identity.
+| **Detect** | Identity Protection risk policies + a custom impossible-travel script | Days 4, 8 |
+| **Triage** | AI SOC agent turns a raw event into a structured JSON incident ticket | Day 9 |
+| **Contain** | PowerShell script revokes the compromised user's sessions | Day 7 |
 
 ---
 
-## Run it
+## 🧱 Conditional Access baseline — at a glance
 
-```bash
-pip install -r requirements.txt
-python demo.py
+| Policy | Purpose | Trigger / Condition | Control | Excludes |
+|---|---|---|---|---|
+| **CA001** | Enforce MFA | All sign-ins | Require MFA | `CA-BreakGlass-Exclude` |
+| **CA002** | Block legacy auth | Legacy client apps | Block access | `CA-BreakGlass-Exclude` |
+| **CA003** | Risky sign-in defence | Sign-in risk = High | Require MFA | `CA-BreakGlass-Exclude` |
+| **CA004** | Compromised-account defence | User risk = High | Require MFA + password change | `CA-BreakGlass-Exclude` |
+
+*Naming convention: `CA + number + purpose + scope` — keeps the policy set auditable as it scales.*
+
+---
+
+## 🏗️ Lab environment
+
+| Account | Role | Licence | Purpose |
+|---|---|---|---|
+| **LabAdmin** | Global Administrator | Entra ID P2 | Working admin |
+| **Chris / Bala / Shahid** | *No admin rights* | Entra ID P2 | Standard test users (least privilege) |
+| **bg-emergency01 / 02** | Global Administrator (permanent) | — | Break-glass emergency access |
+
+Both break-glass accounts live in the security group **`CA-BreakGlass-Exclude`**, excluded from every policy.
+
+---
+
+# Part 1 — Identity Hardening (Conditional Access, Identity Protection, PIM)
+
+## 🔐 Day 1 — Break-glass emergency accounts
+Two cloud-only emergency admin accounts in an exclusion group.
+> **Why:** emergency logins deliberately excluded from every policy, so a misconfiguration, MFA outage, or identity-provider failure can never lock the org out of its own tenant. Cloud-only, permanent admin, two for redundancy.
+
+## 🔑 Day 2 — Enforce MFA — `CA001`
+All users (excluding break-glass) → Require MFA. Built in **report-only**, validated in sign-in logs, then enabled. **Migrated the tenant off Security Defaults** to use granular Conditional Access.
+> **Why:** MFA makes a stolen password useless alone — the top defence against account takeover.
+
+## 🚫 Day 3 — Block legacy authentication — `CA002`
+Condition scoped to legacy client apps only → **Block access**. Validated with the **What If** tool.
+> **Why:** legacy protocols (POP/IMAP/SMTP) can't do MFA, so leaving them open lets attackers bypass MFA with a stolen password. Blocking them closes that back door.
+
+## 🧠 Day 4 — Identity Protection risk policies — `CA003` & `CA004`
+Adaptive, ML-driven policies:
+- **Sign-in risk = High → require MFA** (is *this login* the real user?)
+- **User risk = High → force password change** (is the *account* compromised? — e.g. leaked credentials). Enabled **SSPR** as the prerequisite.
+> **Why:** MFA is static; Identity Protection is *adaptive* — it reacts to detected threats automatically.
+
+## ⏱️ Day 5 — Privileged Identity Management (PIM)
+Made a test user **eligible** (not active) for User Administrator, with **2-hour, MFA-and-justification-gated activation**.
+> **Why:** eliminates *standing privilege* — admin rights exist only when activated, shrinking the attack window. Break-glass stays permanent as the deliberate exception.
+
+---
+
+# Part 2 — Security Automation (PowerShell + Microsoft Graph + AI)
+
+## 💻 Day 6 — Microsoft Graph PowerShell — the automation gateway
+Connected to Graph with **least-privilege scopes** (`User.Read.All`, `Group.Read.All`), then queried and filtered directory objects programmatically.
+> **Why:** you can't click 5,000 users — Graph lets you read and act at scale. Delegated vs application permissions, and requesting only the scope the task needs.
+
+## 🧯 Day 7 — Automated session revocation — `Revoke-Sessions.ps1`
+Escalated to a **write scope** (`User.RevokeSessions.All`) and revoked a compromised user's sessions to force re-authentication.
+> **Why:** a password reset alone doesn't kill live tokens — revoking sessions instantly evicts the attacker. This is the **Contain** step.
+
+## 🧮 Day 8 — Impossible-travel detection — `Test-ImpossibleTravel.ps1`
+A PowerShell script using the **haversine formula** to compute distance between two sign-in locations and derive implied travel speed — flagging physically impossible logins.
+> **Why:** mirrors how Entra ID Protection detects atypical travel. Key insight: impossible travel is **distance ÷ time** — the same distance is impossible in 1 hour but plausible over 24. This is the **Detect** step.
+
+## 🤖 Day 9 — AI SOC triage agent — `soc-triage-agent-prompt.txt`
+An AI agent that ingests a raw security event and returns a **structured JSON incident ticket** — severity, MITRE ATT&CK mapping, indicators, and a recommended containment playbook.
+> **Why:** automates Tier-1 triage so analysts focus on investigation. Structured JSON output is *machine-readable*, so it can feed a ticketing system or an automated playbook. This is the **Triage** step. See `example-triage-ticket.json`.
+
+---
+
+## 📁 Repository contents
+
+```
+entra-identity-hardening/
+├── README.md
+├── scripts/
+│   ├── Revoke-Sessions.ps1          # Day 7 - containment
+│   └── Test-ImpossibleTravel.ps1    # Day 8 - detection (haversine)
+├── ai-agent/
+│   ├── soc-triage-agent-prompt.txt  # Day 9 - agent design
+│   └── example-triage-ticket.json   # Day 9 - sample output
+└── screenshots/                     # policy + evidence screenshots
 ```
 
-You'll watch one task's calls thread under a shared trace, the evidence **verify clean** (chain + signatures + anchor), a **mid-chain edit** get caught by the hash chain, and — the key case — a **truncation** that the chain alone accepts but the WORM anchor **catches**.
+---
 
-```bash
-pip install pytest && pytest -q      # the guarantees as tests
-```
+## 🎯 Key concepts demonstrated
+
+- **Least privilege** — across users, PIM (just-in-time), break-glass exclusion, and Graph API scopes.
+- **Safe change management** — report-only mode + the What If tool before enforcing.
+- **Defence in depth** — MFA, legacy-auth blocking, risk-based policies layered together.
+- **Security Defaults → Conditional Access migration** — blunt baseline to granular, testable control.
+- **Automation at scale** — Microsoft Graph + PowerShell to read and act on the directory.
+- **Threat containment** — session revocation vs password reset.
+- **Detection logic** — impossible travel = distance ÷ time.
+- **AI-assisted SOC** — structured, machine-readable triage that closes the loop.
 
 ---
 
-## Why each design choice
+## 🧰 Skills & technologies
 
-- **Default deny.** If no role explicitly permits a tool, the answer is DENY. Least privilege is the default, not an add-on.
-- **Approval for destructive actions.** `delete_file` is never refused outright *or* run silently — it's **held for a human**. Consequence, not step count, decides what escalates.
-- **Hash chain.** Each event stores the previous event's hash, so editing or deleting any earlier event breaks every hash after it. Tampering is *detectable*.
-- **Ed25519 signatures.** Even a full chain recompute can't forge an event without the signing key; verification needs only the public key.
-- **Deterministic decisions.** Same input, same verdict — which is what makes the audit trail explainable after the fact.
+`Microsoft Entra ID` · `Conditional Access` · `Entra ID Protection` · `Privileged Identity Management (PIM)` · `Multi-Factor Authentication` · `PowerShell` · `Microsoft Graph SDK` · `Identity & Access Management` · `Least Privilege` · `Incident Response` · `AI-assisted Security Operations` · `Defence in Depth`
 
 ---
 
-## Roadmap
+## ✅ Outcome
 
-- **S1 · Foundations** ✅ — repo, gateway, policy, tamper-evident audit
-- **S2 · Gateway & identity** ✅ — token auth, tool registry, scoped credentials, revocation
-- **S3 · Policy & intent** ✅ — intent scoping (task boundary) + per-parameter policy conditions
-- **S4 · Evidence** ✅ — trace/run/agent IDs, chain head anchored to a WORM witness, truncation detection
-- **S5 · Approval & dashboard** ✅ — human-in-the-loop approval service + control-plane dashboard
-- **S6 · Red-team lab** ✅ — 12 adversary techniques fired at the live gateway, all defended *(this)*
-- **S7 · Real integrations** — Entra / Defender / Intune MCP tools: *"Investigate Defender incident 12345"* end-to-end
-- **Research track** — adversarial ML, robustness, neural-network verification (kept out of the enforcement path)
+A hardened Entra ID tenant with MFA enforced, legacy auth blocked, adaptive risk-based remediation, just-in-time privileged access, and protected break-glass access — **plus** an automated detect → triage → contain pipeline built with PowerShell, Microsoft Graph, and an AI triage agent. The standard secure identity baseline for a Microsoft organisation, extended into automation, and built and validated with professional rollout practices.
 
----
-
-## 🎯 Red-team lab
-
-AgentLedger doesn't just *claim* to resist attacks — it's fired at. The red-team lab (`attacks/`) runs 12 adversary techniques through the **live gateway** and reports where each one is stopped:
-
-```bash
-python redteam.py      # runs the attacks, writes redteam-report.html
-```
-
-| Class | Techniques | Stopped at |
-|---|---|---|
-| Broken authentication | forged identity · revoked replay · expired reuse | **auth** |
-| Excessive agency (LLM06) | privilege escalation · cross-scope · malicious tool | **scope / registry** |
-| Prompt injection (LLM01) | direct · indirect (poisoned data) | **intent** |
-| Sensitive-info disclosure (LLM02) | path exfiltration · external recipient | **policy** |
-| Repudiation / tampering | audit edit · truncation | **evidence** |
-
-**12/12 defended.** Each attack is also a regression test (`tests/security/`), so a future change that opens a hole fails the build. Techniques map to the **OWASP Top 10 for LLM Applications**.
-
----
-
-## Threats this addresses
-
-Excessive agency · confused-deputy · prompt-injection-driven tool abuse · tool poisoning · repudiation. The policy engine constrains *what* an agent can do; the audit layer proves *what it did*.
-
-> Built in public as part of a hands-on cloud-security portfolio. MVP uses synthetic data and a fake MCP server; no production systems involved.
+> *Part of an ongoing hands-on cloud security portfolio — building in public.*
