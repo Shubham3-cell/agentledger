@@ -1,5 +1,12 @@
 # 🛡️ Entra ID Identity Hardening & Security Automation Lab
 
+![security](https://github.com/Shubham3-cell/agentledger/actions/workflows/security.yml/badge.svg)
+
+## Security & supply chain
+
+Every push runs a hardened CI pipeline: **Gitleaks** (secrets), **Bandit + CodeQL** (Python SAST), **pip-audit** (dependencies), **Trivy** (filesystem / CVEs) and **Syft** (SBOM). The workflow uses least-privilege `GITHUB_TOKEN` permissions and fails the build on medium+ findings — the project stays shippable by construction.
+
+
 ![Microsoft Entra ID](https://img.shields.io/badge/Microsoft-Entra%20ID-0078D4?logo=microsoftazure&logoColor=white)
 ![Conditional Access](https://img.shields.io/badge/Focus-Conditional%20Access-2563eb)
 ![Identity Protection](https://img.shields.io/badge/Identity-Protection%20%2B%20PIM-6941C6)
