@@ -59,14 +59,25 @@ jobs:
   vuln-scan:
     name: Grype (filesystem / deps)
     runs-on: ubuntu-latest
-    # NOTE: originally Trivy — swapped to Grype after the 2026 aquasecurity/trivy-action
-    # supply-chain compromise. Supply-chain hygiene in action.
+    # Swapped from Trivy after the 2026 aquasecurity/trivy-action supply-chain compromise.
     steps:
       - uses: actions/checkout@v4
       - name: Install Grype
         run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
       - name: Scan filesystem — fail on high+
         run: grype dir:. --fail-on high
+
+  iac-scan:
+    name: Checkov (IaC security)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install checkov
+      - name: Checkov scan of infra/ (fails on misconfiguration)
+        run: checkov --config-file .checkov.yaml
 
   codeql:
     name: CodeQL (deep SAST)

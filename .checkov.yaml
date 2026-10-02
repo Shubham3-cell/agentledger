@@ -1,0 +1,20 @@
+# Checkov configuration for AgentLedger's reference IaC.
+#
+# The Terraform in infra/ is a hardened baseline that is SCANNED but NOT deployed
+# ($0). A few checks require a live/deployed environment — private endpoints,
+# customer-managed keys, Log Analytics wiring — that a non-deployed reference
+# intentionally omits. Those are skipped with a reason below; everything else is
+# enforced and fails the build.
+directory:
+  - infra
+compact: true
+skip-check:
+  - CKV2_AZURE_1    # Storage: customer-managed key (platform-managed keys for the reference)
+  - CKV2_AZURE_18   # Storage: customer-managed key
+  - CKV2_AZURE_33   # Storage: private endpoint (not deployed)
+  - CKV2_AZURE_40   # Storage: SAS expiry policy wiring (not deployed)
+  - CKV2_AZURE_41   # Storage: account SAS policy (not deployed)
+  - CKV2_AZURE_21   # Storage: diagnostic logging to Log Analytics (not deployed)
+  - CKV_AZURE_33    # Storage: queue service logging (no queues in this design)
+  - CKV2_AZURE_32   # Key Vault: private endpoint (not deployed)
+  - CKV2_AZURE_31   # NSG: flow logs to Log Analytics (not deployed)
