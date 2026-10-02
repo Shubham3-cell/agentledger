@@ -4,7 +4,7 @@
 
 ## Security & supply chain
 
-Every push runs a hardened CI pipeline: **Gitleaks** (secrets), **Bandit + CodeQL** (Python SAST), **pip-audit** (dependencies), **Trivy** (filesystem / CVEs) and **Syft** (SBOM). The workflow uses least-privilege `GITHUB_TOKEN` permissions and fails the build on medium+ findings — the project stays shippable by construction.
+Every push runs a hardened CI pipeline: **Gitleaks** (secrets), **Bandit + CodeQL** (Python SAST), **pip-audit** (dependencies), **Grype** (filesystem / CVEs) and **Syft** (SBOM). The workflow uses least-privilege `GITHUB_TOKEN` permissions and fails the build on medium+ findings — the project stays shippable by construction.
 
 
 ![Microsoft Entra ID](https://img.shields.io/badge/Microsoft-Entra%20ID-0078D4?logo=microsoftazure&logoColor=white)
