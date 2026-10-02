@@ -1,0 +1,26 @@
+id: new-global-admin
+title: New Global Administrator role assignment
+description: >
+  Detects a principal being added to the Global Administrator role in Entra ID.
+  Privileged-role grants are a common persistence and escalation step; every one
+  should be expected and approved (e.g. via PIM).
+severity: high
+status: production
+mitre:
+  tactic: PrivilegeEscalation
+  technique: T1098               # Account Manipulation
+data_source: AuditLogs
+false_positives:
+  - Planned, approved privileged-role assignment performed through PIM
+references:
+  - https://attack.mitre.org/techniques/T1098/
+query: |
+  AuditLogs
+  | where OperationName == "Add member to role"
+  | mv-expand TargetResources
+  | extend RoleName = tostring(parse_json(tostring(TargetResources.modifiedProperties))[1].newValue)
+  | where RoleName has "Global Administrator"
+  | project TimeGenerated,
+            Actor  = tostring(InitiatedBy.user.userPrincipalName),
+            Target = tostring(TargetResources.userPrincipalName),
+            RoleName

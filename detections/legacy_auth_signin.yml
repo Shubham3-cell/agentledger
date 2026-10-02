@@ -1,0 +1,23 @@
+id: legacy-auth-signin
+title: Successful sign-in using legacy authentication
+description: >
+  Legacy authentication protocols (IMAP, POP3, SMTP, older Exchange clients)
+  bypass modern controls such as MFA and most Conditional Access policies. A
+  successful legacy-auth sign-in is a high-value indicator of credential abuse.
+severity: medium
+status: production
+mitre:
+  tactic: DefenseEvasion
+  technique: T1078               # Valid Accounts
+data_source: SigninLogs
+false_positives:
+  - Legitimate legacy systems not yet migrated (these should be explicitly allow-listed)
+references:
+  - https://attack.mitre.org/techniques/T1078/
+query: |
+  SigninLogs
+  | where ResultType == 0                  // successful sign-in
+  | where ClientAppUsed in ("Other clients","IMAP4","POP3","SMTP",
+                            "Exchange ActiveSync","Authenticated SMTP")
+  | project TimeGenerated, UserPrincipalName, ClientAppUsed, IPAddress, AppDisplayName
+  | order by TimeGenerated desc
